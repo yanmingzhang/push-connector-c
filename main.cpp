@@ -61,10 +61,99 @@ static void close_cb(uv_handle_t *handle)
     delete conn;
 }
 
+static void write_cb(uv_write_t *req, int status)
+{
+    delete (char *)req->data;
+    delete req;
+}
+
 static void conn_timer_expire(uv_timer_t *handle)
 {
     conn_t *conn = CONTAINER_OF(handle, conn_t, timer);
     uv_close((uv_handle_t *)&conn->tcp, close_cb);
+}
+
+static void read_notifications_cb(uv_work_t *req)
+{
+
+}
+
+static size_t calc_notification_push_size(const notification_t& notification)
+{
+    return 3 + (2 + notification.topic.length()) + 16 +
+           (1 + notification.sender.length()) +
+           (2 + notification.content.length());
+}
+
+static char *write_notification_push_msg(char *out, const notification_t& notification)
+{
+    size_t length;
+
+    // message size
+    *(uint16_t *)out = htobe16(calc_notification_push_size(notification));
+    out += 2;
+
+    // message type
+    *(uint8_t *)out = MSG_NOTIFICATION_PUSH;
+    out++;
+
+    // topic
+    length = notification.topic.length();
+    *(uint16_t *)out = htobe16(length);
+    out += 2;
+    memcpy(out, notification.topic.data(), length);
+    out += length;
+
+    // create time
+    *(uint64_t *)out = htobe64(notification.create_time.time_and_version);
+    out += 8;
+    *(uint64_t *)out = htobe64(notification.create_time.clock_seq_and_node);
+    out += 8;
+
+    // sender
+    length = notification.sender.length();
+    *(uint8_t *)out = length;
+    out++;
+    memcpy(out, notification.sender.data(), length);
+    out += length;
+
+    // content
+    length = notification.content.length();
+    *(uint16_t *)out = htobe16(length);
+    out += 2;
+    memcpy(out, notification.content.data(), length);
+    out += length;
+
+    return out;
+}
+
+static void after_read_notifications_cb(uv_work_t *req, int status)
+{
+    read_notifications_work_t *work = CONTAINER_OF(req, read_notifications_work_t, work_req);
+
+    if (status != UV__ECANCELED && !work->notifications.empty()) {
+        // write out results
+        uv_write_t *write_req = new uv_write_t();
+        uv_buf_t write_buf;
+
+        std::vector<notification_t>::const_iterator itr;
+        size_t total_size = 0;
+        for (itr = work->notifications.begin(); itr != work->notifications.end(); ++itr) {
+            total_size += calc_notification_push_size(*itr);
+        }
+
+        write_buf.base = new char[total_size];
+        write_buf.len = total_size;
+        char *out = write_buf.base;
+        for (itr = work->notifications.begin(); itr != work->notifications.end(); ++itr) {
+            out = write_notification_push_msg(out, *itr);
+        }
+
+        write_req->data = write_buf.base;
+        uv_write(write_req, (uv_stream_t *)&work->conn->tcp, &write_buf, 1, write_cb);
+    }
+
+    delete work;
 }
 
 static void process_login(conn_t *conn, const char *buffer, uint16_t size)
@@ -102,6 +191,13 @@ static void process_login(conn_t *conn, const char *buffer, uint16_t size)
 
         topic_offset_map[topic] = offset;
     }
+
+    read_notifications_work_t *work = new read_notifications_work_t;
+    work->device_id = device_id;
+    work->topic_offset_map = topic_offset_map;
+    work->conn = conn;
+
+    uv_queue_work(conn->tcp.loop, &work->work_req, read_notifications_cb, after_read_notifications_cb);
 
     // put to device map
     std::lock_guard<std::mutex> lock(g_mutex);

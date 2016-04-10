@@ -3,7 +3,10 @@
 
 #include <stdint.h>
 #include <uv.h>
+#include <cassandra.h>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 // MIN 3, MAX 65536
 #define PREALLOC_BUFFER_SIZE    256
@@ -28,6 +31,22 @@ typedef struct {
     std::string device_id;
 
 } conn_t;
+
+typedef struct {
+    std::string topic;
+    CassUuid create_time;
+    std::string sender;
+    std::string content;
+} notification_t;
+
+typedef struct {
+    uv_work_t work_req;
+    std::string device_id;
+    std::unordered_map<std::string, CassUuid> topic_offset_map;
+    conn_t *conn;
+    // result
+    std::vector<notification_t> notifications;
+} read_notifications_work_t;
 
 /* This macro looks complicated but it's not: it calculates the address
  * of the embedding struct through the address of the embedded struct.
