@@ -40,7 +40,7 @@ typedef struct {
     conn_t *conn;
     CassClient *cass_client;
     // result
-    std::vector<notification_t> notifications;
+    std::vector<Notification> notifications;
 } read_notifications_work_t;
 
 /* This macro looks complicated but it's not: it calculates the address

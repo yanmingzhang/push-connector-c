@@ -81,14 +81,14 @@ static void read_notifications_cb(uv_work_t *req)
     
 }
 
-static size_t calc_notification_push_size(const notification_t& notification)
+static size_t calc_notification_push_size(const Notification& notification)
 {
-    return 3 + (2 + notification.topic.length()) + 16 +
-           (1 + notification.sender.length()) +
-           (2 + notification.content.length());
+    return 3 + (2 + notification.topic().length()) + 16 +
+           (1 + notification.sender().length()) +
+           (2 + notification.content().length());
 }
 
-static char *write_notification_push_msg(char *out, const notification_t& notification)
+static char *write_notification_push_msg(char *out, const Notification& notification)
 {
     size_t length;
 
@@ -101,30 +101,30 @@ static char *write_notification_push_msg(char *out, const notification_t& notifi
     out++;
 
     // topic
-    length = notification.topic.length();
+    length = notification.topic().length();
     *(uint16_t *)out = htobe16(length);
     out += 2;
-    memcpy(out, notification.topic.data(), length);
+    memcpy(out, notification.topic().data(), length);
     out += length;
 
     // create time
-    *(uint64_t *)out = htobe64(notification.create_time.time_and_version);
+    *(uint64_t *)out = htobe64(notification.create_time().time_and_version);
     out += 8;
-    *(uint64_t *)out = htobe64(notification.create_time.clock_seq_and_node);
+    *(uint64_t *)out = htobe64(notification.create_time().clock_seq_and_node);
     out += 8;
 
     // sender
-    length = notification.sender.length();
+    length = notification.sender().length();
     *(uint8_t *)out = length;
     out++;
-    memcpy(out, notification.sender.data(), length);
+    memcpy(out, notification.sender().data(), length);
     out += length;
 
     // content
-    length = notification.content.length();
+    length = notification.content().length();
     *(uint16_t *)out = htobe16(length);
     out += 2;
-    memcpy(out, notification.content.data(), length);
+    memcpy(out, notification.content().data(), length);
     out += length;
 
     return out;
@@ -141,7 +141,7 @@ static void after_read_notifications_cb(uv_work_t *req, int status)
         uv_write_t *write_req = new uv_write_t();
         uv_buf_t write_buf;
 
-        std::vector<notification_t>::const_iterator itr;
+        std::vector<Notification>::const_iterator itr;
         size_t total_size = 0;
         for (itr = work->notifications.begin(); itr != work->notifications.end(); ++itr) {
             total_size += calc_notification_push_size(*itr);
@@ -205,7 +205,7 @@ static void process_login(conn_t *conn, const char *buffer, uint16_t size)
     work->device_id = device_id;
     work->topic_offset_map = topic_offset_map;
     work->conn = conn;
-    work->cass_client = (CassClient *)conn->tcp.loop.data;
+    work->cass_client = (CassClient *)conn->tcp.loop->data;
 
     ++conn->ref_count;
     uv_queue_work(conn->tcp.loop, &work->work_req, read_notifications_cb, after_read_notifications_cb);
