@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <cassandra.h>
 #include "defs.h"
+#include "cassclient.h"
 
 #define IDLE_TIMEOUT    300000
 
@@ -31,13 +32,7 @@ static void conn_init(conn_t *conn, uv_loop_t *loop)
     uv_timer_init(loop, &conn->timer);
     uv_tcp_init(loop, &conn->tcp);
     conn_reset_buffer(conn);
-}
-
-static void conn_free(conn_t *conn)
-{
-    // ?
-    uv_close((uv_handle_t *)&conn->timer, NULL);
-    delete conn;
+    conn->ref_count = 1;
 }
 
 static void alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf)
@@ -57,8 +52,12 @@ static void close_cb(uv_handle_t *handle)
         std::lock_guard<std::mutex> lock(g_mutex);
         g_map.erase(conn->device_id);
     }
-
-    delete conn;
+    
+    uv_close((uv_handle_t *)&conn->timer, NULL);
+    
+    if (--conn->ref_count == 0) {
+        delete conn;
+    }
 }
 
 static void write_cb(uv_write_t *req, int status)
@@ -75,7 +74,11 @@ static void conn_timer_expire(uv_timer_t *handle)
 
 static void read_notifications_cb(uv_work_t *req)
 {
-
+    read_notifications_work_t *work = CONTAINER_OF(req, read_notifications_work_t, work_req);
+    CassClient *cass_client = work->cass_client;
+    
+    
+    
 }
 
 static size_t calc_notification_push_size(const notification_t& notification)
@@ -130,8 +133,10 @@ static char *write_notification_push_msg(char *out, const notification_t& notifi
 static void after_read_notifications_cb(uv_work_t *req, int status)
 {
     read_notifications_work_t *work = CONTAINER_OF(req, read_notifications_work_t, work_req);
-
-    if (status != UV__ECANCELED && !work->notifications.empty()) {
+    conn_t *conn = work->conn;
+    
+    if (status != UV__ECANCELED && !work->notifications.empty() &&
+        !uv_is_closing((uv_handle_t *)&conn->tcp)) {
         // write out results
         uv_write_t *write_req = new uv_write_t();
         uv_buf_t write_buf;
@@ -154,6 +159,10 @@ static void after_read_notifications_cb(uv_work_t *req, int status)
     }
 
     delete work;
+    
+    if (--conn->ref_count == 0) {
+        delete conn;
+    }
 }
 
 static void process_login(conn_t *conn, const char *buffer, uint16_t size)
@@ -196,7 +205,9 @@ static void process_login(conn_t *conn, const char *buffer, uint16_t size)
     work->device_id = device_id;
     work->topic_offset_map = topic_offset_map;
     work->conn = conn;
+    work->cass_client = (CassClient *)conn->tcp.loop.data;
 
+    ++conn->ref_count;
     uv_queue_work(conn->tcp.loop, &work->work_req, read_notifications_cb, after_read_notifications_cb);
 
     // put to device map
@@ -335,8 +346,14 @@ int main(int argc, char *argv[])
     uv_loop_t *loop;
     uv_tcp_t server;
     struct sockaddr_in addr;
-
+    CassClient cass_client("10.240.225.101");
+    
+    if (!cass_client.connect()) {
+        return 1;
+    }
+    
     loop = uv_default_loop();
+    loop->data = &cass_client;
     uv_tcp_init(loop, &server);
 
     uv_ip4_addr("0.0.0.0", 52572, &addr);

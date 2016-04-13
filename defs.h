@@ -7,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "cassclient.h"
 
 // MIN 3, MAX 65536
 #define PREALLOC_BUFFER_SIZE    256
@@ -20,7 +21,6 @@
 
 typedef struct {
     uv_tcp_t tcp;
-    uv_write_t write_req;
     uv_timer_t timer;
     char prealloc_buf[PREALLOC_BUFFER_SIZE];
     // message parsing
@@ -29,21 +29,16 @@ typedef struct {
     uint16_t msg_size;
 
     std::string device_id;
-
+    
+    int ref_count;
 } conn_t;
-
-typedef struct {
-    std::string topic;
-    CassUuid create_time;
-    std::string sender;
-    std::string content;
-} notification_t;
 
 typedef struct {
     uv_work_t work_req;
     std::string device_id;
     std::unordered_map<std::string, CassUuid> topic_offset_map;
     conn_t *conn;
+    CassClient *cass_client;
     // result
     std::vector<notification_t> notifications;
 } read_notifications_work_t;
