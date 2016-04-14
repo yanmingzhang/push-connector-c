@@ -6,6 +6,7 @@
 #include <uv.h>
 #include <string>
 #include <mutex>
+#include <memory>
 #include <unordered_map>
 #include <cassandra.h>
 #include "defs.h"
@@ -77,15 +78,35 @@ static void read_notifications_cb(uv_work_t *req)
     read_notifications_work_t *work = CONTAINER_OF(req, read_notifications_work_t, work_req);
     CassClient *cass_client = work->cass_client;
     
-    
-    
+    Device *pDevice;
+    CassError rc = cass_client->get_device(work->device_id.c_str(), &pDevice);
+    if (rc != CASS_OK)
+        return;
+
+    std::unique_ptr<Device> device(pDevice);
+       
+    if (device == NULL) {
+        // TODO: insert new device?
+        return;
+    }
+
+    CassUuid offset;    
+    for (const std::string& topic: device->topics()) {
+        auto itr = work->topic_offset_map.find(topic);
+        if (itr == work->topic_offset_map.end()) {
+            offset = cass_uuid_min_from_time(0, &offset);
+        } else {
+            offset = *itr;
+        }
+        
+        // get notifications for this topic
+        rc = cass_client->get_notifications(topic.c_str(), offset, work->notifications);
+    }
 }
 
 static size_t calc_notification_push_size(const Notification& notification)
 {
-    return 3 + (2 + notification.topic().length()) + 16 +
-           (1 + notification.sender().length()) +
-           (2 + notification.content().length());
+    return 3 + notification.estimate_size();
 }
 
 static char *write_notification_push_msg(char *out, const Notification& notification)
@@ -99,35 +120,8 @@ static char *write_notification_push_msg(char *out, const Notification& notifica
     // message type
     *(uint8_t *)out = MSG_NOTIFICATION_PUSH;
     out++;
-
-    // topic
-    length = notification.topic().length();
-    *(uint16_t *)out = htobe16(length);
-    out += 2;
-    memcpy(out, notification.topic().data(), length);
-    out += length;
-
-    // create time
-    *(uint64_t *)out = htobe64(notification.create_time().time_and_version);
-    out += 8;
-    *(uint64_t *)out = htobe64(notification.create_time().clock_seq_and_node);
-    out += 8;
-
-    // sender
-    length = notification.sender().length();
-    *(uint8_t *)out = length;
-    out++;
-    memcpy(out, notification.sender().data(), length);
-    out += length;
-
-    // content
-    length = notification.content().length();
-    *(uint16_t *)out = htobe16(length);
-    out += 2;
-    memcpy(out, notification.content().data(), length);
-    out += length;
-
-    return out;
+    
+    return notification.encode(out);
 }
 
 static void after_read_notifications_cb(uv_work_t *req, int status)
@@ -143,15 +137,15 @@ static void after_read_notifications_cb(uv_work_t *req, int status)
 
         std::vector<Notification>::const_iterator itr;
         size_t total_size = 0;
-        for (itr = work->notifications.begin(); itr != work->notifications.end(); ++itr) {
-            total_size += calc_notification_push_size(*itr);
+        for (const Notification& notification: work->notifications) {
+            total_size += calc_notification_push_size(notification);
         }
 
         write_buf.base = new char[total_size];
         write_buf.len = total_size;
         char *out = write_buf.base;
-        for (itr = work->notifications.begin(); itr != work->notifications.end(); ++itr) {
-            out = write_notification_push_msg(out, *itr);
+        for (const Notification& notification: work->notifications) {
+            out = write_notification_push_msg(out, notification);
         }
 
         write_req->data = write_buf.base;
