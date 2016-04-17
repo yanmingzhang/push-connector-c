@@ -1,6 +1,9 @@
 #ifndef CASSCLIENT_H_
 #define CASSCLIENT_H_
 
+#include <stdint.h>
+#include <string.h>
+#include <endian.h>
 #include <string>
 #include <vector>
 #include <unordered_set>
@@ -30,7 +33,6 @@ private:
 };
 
 class Notification {
-
 public:
     Notification(const std::string& topic, const CassUuid& create_time,
                  const std::string& sender, const std::string& content)
@@ -39,6 +41,70 @@ public:
     }
 
     ~Notification() {}
+    
+    size_t estimate_size() {
+        return (2 + topic_.length()) + 16 +
+               (1 + sender_.length()) +
+               (2 + content_.length());
+    }
+    
+    char *encode(char *out) {
+        // topic
+        *(uint16_t *)out = htobe16(topic_.length());
+        out += 2;
+        memcpy(out, topic_.data(), topic_.length());
+        out += length;
+
+        // create time
+        *(uint64_t *)out = htobe64(create_time_.time_and_version);
+        out += 8;
+        *(uint64_t *)out = htobe64(create_time_.clock_seq_and_node);
+        out += 8;
+
+        // sender
+        *(uint8_t *)out = sender_.length();
+        out++;
+        memcpy(out, sender_.data(), sender_.length());
+        out += length;
+
+        // content
+        *(uint16_t *)out = htobe16(content_.length());
+        out += 2;
+        memcpy(out, content_.data(), content_.length());
+        out += length;
+        
+        return out;
+    }
+    
+    const char *decode(const char *in) {
+        size_t length;
+        
+        // topic
+        length = be16toh(*(uint16_t *)in);
+        in += 2;
+        topic_.assign(in, length);
+        in += length;
+        
+        // create time
+        create_time_.time_and_version = *(uint64_t *)in;
+        in += 8;
+        create_time_.clock_seq_and_node = *(uint64_t *)in;
+        in += 8;
+        
+        // sender
+        length = *(uint8_t *)in;
+        in++;
+        sender_.assign(in, length);
+        in += length;
+        
+        // content
+        length = be16toh(*(uint16_t *)in);
+        in += 2;
+        content_.assign(in, length);
+        in += length;
+        
+        return in;
+    }   
 
     const std::string& topic() const { return topic_; }
     const CassUuid& create_time() const { return create_time_; }
@@ -46,10 +112,10 @@ public:
     const std::string& content() const { return content_; }
 
 private:
-    const std::string topic_;
-    const CassUuid create_time_;
-    const std::string sender_;
-    const std::string content_;
+    std::string topic_;
+    CassUuid create_time_;
+    std::string sender_;
+    std::string content_;
 };
 
 class CassClient

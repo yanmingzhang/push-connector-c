@@ -240,5 +240,3 @@ CassError CassClient::device_offline(const char *device_id, const CassInet& ip, 
 
     return rc;
 }
-
-
