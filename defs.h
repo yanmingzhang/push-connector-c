@@ -2,9 +2,11 @@
 #define DEFS_H
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <uv.h>
 #include <netinet/in.h>
 #include <cassandra.h>
+#include <arpa/inet.h>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -25,7 +27,25 @@ class Config
 {
 public:
     explicit Config(Properties props) {
+        const char *ip;
+        const char *port;
 
+        ip = props.get_property("lan.listen.ip");
+        port = props.get_property("lan.listen.port");
+        if (!to_addr(ip, port, lan_addr_)) {
+            return;
+        }
+
+        ip = props.get_property("wan.listen.ip");
+        port = props.get_property("wan.listen.port");
+        if (!to_addr(ip, port, wan_addr_)) {
+            return;
+        }
+
+        cassandra_addr_ = props.get_property("cassandra.address");
+        if (cassandra_addr_.empty()) {
+            return;
+        }
     }
 
     struct sockaddr_in& lan_addr() { return lan_addr_; }
@@ -34,6 +54,27 @@ public:
 
     operator bool() {
         return !cassandra_addr_.empty();
+    }
+
+private:
+    static bool to_addr(const char *ip, const char *str_port, struct sockaddr_in& addr) {
+        if (ip == NULL || *ip == '\0' || str_port == NULL || *str_port == '\0') {
+            return false;
+        }
+
+        addr.sin_family = AF_INET;
+        if (!inet_aton(ip, &addr.sin_addr)) {
+            return false;
+        }
+
+        int port = atoi(ip);
+        if (port <= 0 || port >= 65536) {
+            return false;
+        }
+
+        addr.sin_port = port;
+
+        return true;
     }
 
 private:
