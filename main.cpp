@@ -5,11 +5,13 @@
 #include <string.h>
 #include <uv.h>
 #include <string>
+#include <iostream>
 #include <mutex>
 #include <unordered_map>
 #include <cassandra.h>
 #include "defs.h"
 #include "cassclient.h"
+#include "properties.h"
 
 #define IDLE_TIMEOUT    300000
 
@@ -347,7 +349,22 @@ int main(int argc, char *argv[])
     uv_tcp_t server;
     struct sockaddr_in addr;
     CassClient cass_client("10.240.225.101");
-    
+
+    if (argc != 2) {
+        std::cout << "Usage: push-connector-c <config file>" << std::endl;
+        return 1;
+    }
+
+    Properties props(argv[1]);
+    if (!props) {
+        return 1;
+    }
+
+    Config config(props);
+    if (!config) {
+        return 1;
+    }
+
     if (!cass_client.connect()) {
         return 1;
     }

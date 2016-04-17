@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <uv.h>
+#include <netinet/in.h>
 #include <cassandra.h>
 #include <string>
 #include <unordered_map>
@@ -18,6 +19,21 @@
 
 // server to device messages
 #define MSG_NOTIFICATION_PUSH   128
+
+class Config
+{
+public:
+    struct sockaddr_in& lan_addr() { return lan_addr_; }
+    struct sockaddr_in& wan_addr() { return wan_addr_; }
+    const std::string& cassandra_addr() { return cassandra_addr_; }
+
+private:
+    struct sockaddr_in lan_addr_;
+    struct sockaddr_in wan_addr_;
+
+    std::string cassandra_addr_;
+
+};
 
 typedef struct {
     uv_tcp_t tcp;
