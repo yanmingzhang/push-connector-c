@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 #include "cassclient.h"
+#include "properties.h"
 
 // MIN 3, MAX 65536
 #define PREALLOC_BUFFER_SIZE    256
@@ -23,9 +24,17 @@
 class Config
 {
 public:
+    explicit Config(Properties props) {
+
+    }
+
     struct sockaddr_in& lan_addr() { return lan_addr_; }
     struct sockaddr_in& wan_addr() { return wan_addr_; }
     const std::string& cassandra_addr() { return cassandra_addr_; }
+
+    operator bool() {
+        return !cassandra_addr_.empty();
+    }
 
 private:
     struct sockaddr_in lan_addr_;

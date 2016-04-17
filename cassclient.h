@@ -49,10 +49,13 @@ public:
     }
     
     char *encode(char *out) {
+        std::string::size_type length;
+
         // topic
-        *(uint16_t *)out = htobe16(topic_.length());
+        length = topic_.length();
+        *(uint16_t *)out = htobe16(length);
         out += 2;
-        memcpy(out, topic_.data(), topic_.length());
+        memcpy(out, topic_.data(), length);
         out += length;
 
         // create time
@@ -62,15 +65,17 @@ public:
         out += 8;
 
         // sender
-        *(uint8_t *)out = sender_.length();
+        length = sender_.length();
+        *(uint8_t *)out = length;
         out++;
-        memcpy(out, sender_.data(), sender_.length());
+        memcpy(out, sender_.data(), length);
         out += length;
 
         // content
-        *(uint16_t *)out = htobe16(content_.length());
+        length = content_.length();
+        *(uint16_t *)out = htobe16(length);
         out += 2;
-        memcpy(out, content_.data(), content_.length());
+        memcpy(out, content_.data(), length);
         out += length;
         
         return out;

@@ -92,13 +92,13 @@ static void read_notifications_cb(uv_work_t *req)
         return;
     }
 
-    CassUuid offset;    
+    CassUuid offset;
     for (const std::string& topic: device->topics()) {
         auto itr = work->topic_offset_map.find(topic);
         if (itr == work->topic_offset_map.end()) {
-            offset = cass_uuid_min_from_time(0, &offset);
+            cass_uuid_min_from_time(0, &offset);
         } else {
-            offset = *itr;
+            offset = itr->second;
         }
         
         // get notifications for this topic
@@ -106,12 +106,12 @@ static void read_notifications_cb(uv_work_t *req)
     }
 }
 
-static size_t calc_notification_push_size(const Notification& notification)
+static size_t calc_notification_push_size(Notification& notification)
 {
     return 3 + notification.estimate_size();
 }
 
-static char *write_notification_push_msg(char *out, const Notification& notification)
+static char *write_notification_push_msg(char *out, Notification& notification)
 {
     size_t length;
 
@@ -139,14 +139,14 @@ static void after_read_notifications_cb(uv_work_t *req, int status)
 
         std::vector<Notification>::const_iterator itr;
         size_t total_size = 0;
-        for (const Notification& notification: work->notifications) {
+        for (Notification& notification: work->notifications) {
             total_size += calc_notification_push_size(notification);
         }
 
         write_buf.base = new char[total_size];
         write_buf.len = total_size;
         char *out = write_buf.base;
-        for (const Notification& notification: work->notifications) {
+        for (Notification& notification: work->notifications) {
             out = write_notification_push_msg(out, notification);
         }
 
