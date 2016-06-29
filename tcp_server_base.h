@@ -32,14 +32,26 @@ public:
         uv_timer_t timer;
     } conn_base_t;
 
-    int run(uv_loop_t *loop, const struct sockaddr_in& addr) {
+    explicit TcpServerBase(unsigned int id, uv_loop_t *loop) : id_(id), loop_(loop) {
+        loop_->data = static_cast<T *>(this);
+    }
+
+    ~TcpServerBase() = default;
+
+    unsigned int id() {
+        return id_;
+    }
+
+    uv_loop_t *loop() {
+        return loop_;
+    }
+
+    int run(const struct sockaddr_in& addr) {
         int rc;
         uv_tcp_t server_socket;
 
-        loop->data = static_cast<T *>(this);
-
         // Create socket early
-        uv_tcp_init_ex(loop, &server_socket, AF_INET);
+        uv_tcp_init_ex(loop_, &server_socket, AF_INET);
 
         uv_os_fd_t fd;
         uv_fileno((const uv_handle_t *)&server_socket, &fd);
@@ -60,8 +72,8 @@ public:
             return rc;
         }
 
-        uv_run(loop, UV_RUN_DEFAULT);
-        uv_loop_close(loop);
+        uv_run(loop_, UV_RUN_DEFAULT);
+        uv_loop_close(loop_);
 
         return 0;
     }
@@ -226,6 +238,10 @@ private:
             conn->msg_size = 0;
         }
     }
+
+private:
+    unsigned int id_;
+    uv_loop_t *loop_;
 };
 
 #endif

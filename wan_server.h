@@ -2,11 +2,13 @@
 #define WAN_SERVER_H
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <string>
 #include <uv.h>
 #include <unordered_map>
 #include <mutex>
+#include <vector>
 #include "tcp_server_base.h"
 #include "cassclient.h"
 
@@ -51,8 +53,8 @@ public:
     };
 
     // constructor
-    explicit WanServer(CassClient&& cass_client) : cass_client_(std::move(cass_client)) {
-
+    explicit WanServer(unsigned int id, uv_loop_t *loop, CassClient&& cass_client)
+        : TcpServerBase(id, loop), cass_client_(std::move(cass_client)) {
     }
 
     static conn_base_t *conn_new() {
@@ -63,6 +65,11 @@ public:
 
     static void conn_close(conn_base_t *conn_base) {
         conn_t *conn = static_cast<conn_t *>(conn_base);
+
+        if (!conn->device_id.empty()) {
+            WanServer *server = static_cast<WanServer *>(conn_base->tcp.loop->data);
+            server->remove_device(conn->device_id, conn);
+        }
 
         if (--conn->ref_count == 0) {
             delete conn;
@@ -99,6 +106,18 @@ public:
         }
 
         return 0;
+    }
+
+    // Attention: called from another thread!
+    void sendNotificationToAll(Notification&& notification) {
+        sendNotification(std::move(notification), std::vector<std::string>());
+    }
+
+    // Attention: called from another thread!
+    void sendNotification(Notification&& notification, std::vector<std::string>&& devices) {
+        PushNotificationAsync *pn_async = new PushNotificationAsync(std::move(notification), std::move(devices));
+        uv_async_init(loop(), &pn_async->handle, push_notification_async_cb);
+        uv_async_send(&pn_async->handle);
     }
 
 private:
@@ -198,7 +217,7 @@ private:
         }
 
         CassUuid offset;
-        for (auto topic: device.topics) {
+        for (const auto& topic: device.topics) {
             auto itr = work->topic_offset_map.find(topic);
             if (itr == work->topic_offset_map.end()) {
                 cass_uuid_min_from_time(0, &offset);
@@ -246,24 +265,96 @@ private:
     }
 
     void put_device(std::string&& device_id, conn_t *conn) {
-        std::lock_guard<std::mutex> lock(device_map_mutex_);
-
         device_map_.emplace(device_id, conn);
     }
 
     void remove_device(const std::string& device_id, conn_t *conn) {
-        std::lock_guard<std::mutex> lock(device_map_mutex_);
-
         auto itr = device_map_.find(device_id);
         if (itr != device_map_.end() && itr->second == conn) {
             device_map_.erase(itr);
         }
     }
 
+    struct PushNotificationAsync {
+        explicit PushNotificationAsync(Notification&& notification, std::vector<std::string>&& devices)
+            : notification(std::move(notification)), devices(std::move(devices)) {
+        }
+
+        uv_async_t handle;
+        Notification notification;
+        std::vector<std::string> devices;   // empty device list indicate send to all devices
+    };
+
+    typedef struct {
+        unsigned int ref_count;
+        uv_buf_t buf;
+    } shared_buffer_t;
+
+    static shared_buffer_t *make_shared_buffer(size_t buf_size) {
+        shared_buffer_t *shared_buffer = (shared_buffer_t *)malloc(sizeof(shared_buffer_t) + buf_size);
+        shared_buffer->ref_count = 1;
+        shared_buffer->buf.base = (char *)(shared_buffer + 1);
+        shared_buffer->buf.len = buf_size;
+
+        return shared_buffer;
+    }
+
+    static void acquire_shared_buffer(shared_buffer_t *shared_buffer) {
+        ++shared_buffer->ref_count;
+    }
+
+    static void release_shared_buffer(shared_buffer_t *shared_buffer) {
+        if (--shared_buffer->ref_count == 0) {
+            free(shared_buffer);
+        }
+    }
+
+    static void write_shared_cb(uv_write_t *req, int status) {
+        shared_buffer_t *shared_buffer = (shared_buffer_t *)(req->data);
+        release_shared_buffer(shared_buffer);
+        delete req;
+    }
+
+    static void write_shared_message(uv_tcp_t *handle, shared_buffer_t *shared_buffer) {
+        uv_write_t *req;
+
+        req = new uv_write_t();
+        req->data = shared_buffer;
+        uv_write(req, (uv_stream_t *)handle, &shared_buffer->buf, 1, write_shared_cb);
+        acquire_shared_buffer(shared_buffer);
+    }
+
+    static void push_notification_async_cb(uv_async_t *handle) {
+        PushNotificationAsync *pn_async = CONTAINER_OF(handle, PushNotificationAsync, handle);
+        WanServer *server = (WanServer *)handle->loop->data;
+        const auto& device_map = server->device_map_;
+
+        // construct push notification message
+        size_t msg_size = calc_notification_push_size(pn_async->notification);
+        shared_buffer_t *shared_buffer = make_shared_buffer(msg_size);
+        write_notification_push_msg(shared_buffer->buf.base, pn_async->notification);
+
+        if (pn_async->devices.empty()) {
+            // send to all devices
+            for (const auto& kv: device_map) {
+                write_shared_message(&kv.second->tcp, shared_buffer);
+            }
+        } else {
+            // send to selected devices
+            for (const auto& device_id: pn_async->devices) {
+                auto itr = device_map.find(device_id);
+                if (itr != device_map.end()) {
+                    write_shared_message(&itr->second->tcp, shared_buffer);
+                }
+            }
+        }
+
+        release_shared_buffer(shared_buffer);
+    }
+
 private:
     CassClient cass_client_;
     std::unordered_map<std::string, conn_t*> device_map_;
-    std::mutex device_map_mutex_;
 };
 
 #endif

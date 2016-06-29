@@ -29,10 +29,8 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    WanServer wan_server(std::move(cass_client));
-
-    uv_loop_t *loop = uv_default_loop();
-    wan_server.run(loop, config.wan_addr());
+    WanServer wan_server(0, uv_default_loop(), std::move(cass_client));
+    wan_server.run(config.wan_addr());
 
     return 0;
 }
