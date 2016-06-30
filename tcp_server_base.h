@@ -32,13 +32,13 @@ public:
         uv_timer_t timer;
     } conn_base_t;
 
-    explicit TcpServerBase(unsigned int id, uv_loop_t *loop) : id_(id), loop_(loop) {
+    explicit TcpServerBase(uint16_t id, uv_loop_t *loop) : id_(id), loop_(loop) {
         loop_->data = static_cast<T *>(this);
     }
 
     ~TcpServerBase() = default;
 
-    unsigned int id() {
+    uint16_t id() {
         return id_;
     }
 
@@ -71,6 +71,8 @@ public:
             std::cerr << "uv_listen failed: " << uv_strerror(rc) << std::endl;
             return rc;
         }
+
+        loop_thread_id_ = uv_thread_self();
 
         uv_run(loop_, UV_RUN_DEFAULT);
         uv_loop_close(loop_);
@@ -239,9 +241,10 @@ private:
         }
     }
 
-private:
-    unsigned int id_;
+protected:
+    uint16_t id_;
     uv_loop_t *loop_;
+    uv_thread_t loop_thread_id_;
 };
 
 #endif

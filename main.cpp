@@ -3,6 +3,7 @@
 #include "properties.h"
 #include "config.h"
 #include "wan_server.h"
+#include "lan_server.h"
 
 int main(int argc, char *argv[])
 {

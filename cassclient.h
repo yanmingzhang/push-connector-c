@@ -27,9 +27,9 @@ struct Device
 };
 
 struct Notification {
-    Notification() {
 
-    }
+    Notification(Notification&&) = default;
+    Notification& operator=(Notification&&) = default;
 
     explicit Notification(std::string&& topic, const CassUuid& create_time,
                           std::string&& sender, std::string&& content)
