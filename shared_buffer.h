@@ -1,38 +1,34 @@
 #ifndef SHARED_BUFFER_H
 #define SHARED_BUFFER_H
 
-#include "uv.h"
+#include <stdlib.h>
+#include <uv.h>
 
-class SharedBuffer {
-public:
-    SharedBuffer *make(size_t buf_size) {
-        char *mem = new char[sizeof(SharedBuffer) + buf_size];
-        return new(mem) SharedBuffer(buf_size);
+typedef struct {
+    uv_buf_t buf;
+    unsigned int ref_count;
+} shared_buffer_t;
+
+
+shared_buffer_t *shared_buffer_new(unsigned int buf_size) {
+    shared_buffer_t *shared_buffer = (shared_buffer_t *)malloc(sizeof(shared_buffer_t) + buf_size);
+    if (shared_buffer != NULL) {
+        shared_buffer->ref_count = 1;
+        shared_buffer->buf.base = (char *)(shared_buffer + 1);
+        shared_buffer->buf.len = buf_size;
     }
 
-    void acquire() {
-        ++ref_count_;
+    return shared_buffer;
+}
+
+void shared_buffer_acquire(shared_buffer_t *shared_buffer) {
+    ++shared_buffer->ref_count;
+}
+
+void shared_buffer_release(shared_buffer_t *shared_buffer) {
+    if (--shared_buffer->ref_count == 0) {
+        free(shared_buffer);
     }
-
-    void release() {
-        if (--ref_count_ == 0) {
-            this->~SharedBuffer();
-            delete reinterpret_cast<char *>(this);
-        }
-    }
-
-private:
-    SharedBuffer(size_t buf_size) : ref_count_(1) {
-        buf_.base = reinterpret_cast<char *>(this + 1);
-        buf_.len = buf_size;
-    }
-
-    ~SharedBuffer() = default;
-
-private:
-    int ref_count_;
-    uv_buf_t buf_;
-};
-
+}
 
 #endif // SHARED_BUFFER_H

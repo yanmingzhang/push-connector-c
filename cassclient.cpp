@@ -62,13 +62,13 @@ bool CassClient::connect()
     }
 
     ps_device_online_ = prepare(
-                "INSERT INTO online_devices(device_id, gate_svr_ip, gate_svr_port) VALUES(?, ?, ?)");
+                "INSERT INTO online_devices(device_id, gate_svr_id) VALUES(?, ?)");
     if (ps_device_online_ == nullptr) {
         return false;
     }
 
     ps_device_offline_ = prepare(
-                "DELETE FROM online_devices WHERE device_id = ? IF gate_svr_ip = ? AND gate_svr_port = ?");
+                "DELETE FROM online_devices WHERE device_id = ? IF gate_svr_id = ?");
     if (ps_device_offline_ == nullptr) {
         return false;
     }
@@ -113,7 +113,7 @@ CassError CassClient::get_device(const char *device_id, Device& device)
     CassError rc;
 
     stmt = cass_prepared_bind(ps_get_device_);
-    cass_statement_bind_string(stmt, 0, device_id);
+    rc = cass_statement_bind_string(stmt, 0, device_id);
     if (rc != CASS_OK) {
         cass_statement_free(stmt);
         return rc;
@@ -212,7 +212,7 @@ CassError CassClient::get_notifications(const char *topic, const CassUuid& offse
     return rc;
 }
 
-bool CassClient::device_online(const char *device_id, const CassInet& ip, cass_int16_t port)
+bool CassClient::device_online(const char *device_id, int64_t gate_svr_id)
 {
     CassStatement *stmt = NULL;
     CassFuture *future = NULL;
@@ -220,8 +220,7 @@ bool CassClient::device_online(const char *device_id, const CassInet& ip, cass_i
 
     stmt = cass_prepared_bind(ps_device_online_);
     cass_statement_bind_string(stmt, 0, device_id);
-    cass_statement_bind_inet(stmt, 1, ip);
-    cass_statement_bind_int16(stmt, 2, port);
+    cass_statement_bind_int64(stmt, 1, gate_svr_id);
 
     future = cass_session_execute(session_, stmt);
     rc = cass_future_error_code(future);
@@ -231,7 +230,7 @@ bool CassClient::device_online(const char *device_id, const CassInet& ip, cass_i
     return (rc == CASS_OK);
 }
 
-bool CassClient::device_offline(const char *device_id, const CassInet& ip, cass_int16_t port)
+bool CassClient::device_offline(const char *device_id, int64_t gate_svr_id)
 {
     CassStatement *stmt = NULL;
     CassFuture *future = NULL;
@@ -239,8 +238,7 @@ bool CassClient::device_offline(const char *device_id, const CassInet& ip, cass_
 
     stmt = cass_prepared_bind(ps_device_offline_);
     cass_statement_bind_string(stmt, 0, device_id);
-    cass_statement_bind_inet(stmt, 1, ip);
-    cass_statement_bind_int16(stmt, 2, port);
+    cass_statement_bind_int64(stmt, 1, gate_svr_id);
 
     future = cass_session_execute(session_, stmt);
     rc = cass_future_error_code(future);
@@ -249,3 +247,18 @@ bool CassClient::device_offline(const char *device_id, const CassInet& ip, cass_
 
     return (rc == CASS_OK);
 }
+
+void CassClient::device_offline_async(const char *device_id, int64_t gate_svr_id)
+{
+    CassStatement *stmt = NULL;
+    CassFuture *future = NULL;
+
+    stmt = cass_prepared_bind(ps_device_offline_);
+    cass_statement_bind_string(stmt, 0, device_id);
+    cass_statement_bind_int64(stmt, 1, gate_svr_id);
+
+    future = cass_session_execute(session_, stmt);
+    cass_future_free(future);
+    cass_statement_free(stmt);
+}
+

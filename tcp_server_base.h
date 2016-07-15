@@ -3,6 +3,8 @@
 
 #include <stdio.h>
 #include <assert.h>
+#include <errno.h>
+#include <strings.h>
 #include <string.h>
 #include <stdint.h>
 #include <uv.h>
@@ -32,8 +34,9 @@ public:
         uv_timer_t timer;
     } conn_base_t;
 
-    explicit TcpServerBase(uint16_t id, uv_loop_t *loop) : id_(id), loop_(loop) {
-        loop_->data = static_cast<T *>(this);
+    explicit TcpServerBase(uint16_t id)
+             : id_(id) {
+        bzero(&server_socket_, sizeof(server_socket_));
     }
 
     ~TcpServerBase() = default;
@@ -43,44 +46,47 @@ public:
     }
 
     uv_loop_t *loop() {
-        return loop_;
+        return server_socket_.loop;
     }
 
-    int run(const struct sockaddr_in& addr) {
+    int initialize(uv_loop_t *loop, const struct sockaddr_in& addr, int backlog) {
         int rc;
-        uv_tcp_t server_socket;
 
         // Create socket early
-        uv_tcp_init_ex(loop_, &server_socket, AF_INET);
+        rc = uv_tcp_init_ex(loop, &server_socket_, AF_INET);
+        if (rc != 0) {
+            fprintf(stderr, "uv_tcp_init_ex: %s\n", uv_strerror(rc));
+            return rc;
+        }
+        server_socket_.data = static_cast<T *>(this);
 
         uv_os_fd_t fd;
-        uv_fileno((const uv_handle_t *)&server_socket, &fd);
+        uv_fileno((const uv_handle_t *)&server_socket_, &fd);
 
         int optval = 1;
-        setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval));
+        rc = setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval));
+        if (rc != 0) {
+            perror("set SO_REUSEPORT socket option");
+            return rc;
+        }
 
 //        uv_ip4_addr(ip, port, &addr);
-        rc = uv_tcp_bind(&server_socket, (const struct sockaddr *)&addr, 0);
-        if (rc < 0) {
-            std::cerr << "uv_tcp_bind failed: " << uv_strerror(rc) << std::endl;
+        rc = uv_tcp_bind(&server_socket_, (const struct sockaddr *)&addr, 0);
+        if (rc != 0) {
+            fprintf(stderr, "uv_tcp_bind: %s\n", uv_strerror(rc));
             return rc;
         }
 
-        rc = uv_listen((uv_stream_t *)&server_socket, 1024, connection_cb);
-        if (rc < 0) {
-            std::cerr << "uv_listen failed: " << uv_strerror(rc) << std::endl;
+        rc = uv_listen((uv_stream_t *)&server_socket_, backlog, on_connect);
+        if (rc != 0) {
+            fprintf(stderr, "uv_listen: %s\n", uv_strerror(rc));
             return rc;
         }
-
-        loop_thread_id_ = uv_thread_self();
-
-        uv_run(loop_, UV_RUN_DEFAULT);
-        uv_loop_close(loop_);
 
         return 0;
     }
 
-    static void close_cb(uv_handle_t *handle) {
+    static void on_close(uv_handle_t *handle) {
         conn_base_t *conn = CONTAINER_OF(handle, conn_base_t, tcp);
         fprintf(stderr, "Connection %p closed\n", conn);
 
@@ -93,7 +99,7 @@ public:
         T::conn_close(conn);
     }
 
-    static void alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
+    static void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
         conn_base_t *conn = CONTAINER_OF(handle, conn_base_t, tcp);
         assert(conn->write_index < conn->buffer.len);
 
@@ -101,7 +107,7 @@ public:
         buf->len = conn->buffer.len - conn->write_index;
     }
 
-    static void connection_cb(uv_stream_t *server, int status) {
+    static void on_connect(uv_stream_t *server, int status) {
         if (status < 0) {
             fprintf(stderr, "New connection error %s\n", uv_strerror(status));
             return;
@@ -116,6 +122,7 @@ public:
         fprintf(stderr, "Connection %p created\n", conn);
 
         uv_tcp_init(server->loop, &conn->tcp);
+        conn->tcp.data = server->data;      // T *
 
         conn->buffer.base = conn->static_buf;
         conn->buffer.len = sizeof(conn->static_buf);
@@ -126,14 +133,14 @@ public:
 
         if (uv_accept(server, (uv_stream_t *)&conn->tcp) == 0) {
             uv_tcp_nodelay(&conn->tcp, 1);
-            uv_read_start((uv_stream_t *)&conn->tcp, alloc_cb, read_cb);
+            uv_read_start((uv_stream_t *)&conn->tcp, alloc_buffer, on_read);
             uv_timer_start(&conn->timer, conn_timer_expire, T::IDLE_TIMEOUT, 0);
         } else {
-            uv_close((uv_handle_t *)&conn->tcp, close_cb);
+            uv_close((uv_handle_t *)&conn->tcp, on_close);
         }
     }
 
-    static void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
+    static void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
     {
         conn_base_t *conn = CONTAINER_OF(stream, conn_base_t, tcp);
 
@@ -143,29 +150,29 @@ public:
             // parse message
             parse_message(conn, nread);
 
-            uv_read_start(stream, alloc_cb, read_cb);
+            uv_read_start(stream, alloc_buffer, on_read);
             uv_timer_start(&conn->timer, conn_timer_expire, T::IDLE_TIMEOUT, 0);
         } else if (nread < 0) {
             if (nread != UV_EOF) {
                 fprintf(stderr, "Read error %s on connection %p\n", uv_err_name(nread), conn);
             }
-            uv_close((uv_handle_t *)stream, close_cb);
+            uv_close((uv_handle_t *)stream, on_close);
         }
     }
 
 protected:
-    conn_base_t *conn_new() {
+    static conn_base_t *conn_new() {
         return new conn_base_t();
     }
 
-    void conn_close(conn_base_t *conn) {
+    static void conn_close(conn_base_t *conn) {
         delete conn;
     }
 
 private:
     static void conn_timer_expire(uv_timer_t *handle) {
         conn_base_t *conn = CONTAINER_OF(handle, conn_base_t, timer);
-        uv_close((uv_handle_t *)&conn->tcp, close_cb);
+        uv_close((uv_handle_t *)&conn->tcp, on_close);
     }
 
     static void parse_message(conn_base_t *conn, ssize_t nread) {
@@ -243,8 +250,7 @@ private:
 
 protected:
     uint16_t id_;
-    uv_loop_t *loop_;
-    uv_thread_t loop_thread_id_;
+    uv_tcp_t server_socket_;
 };
 
 #endif
